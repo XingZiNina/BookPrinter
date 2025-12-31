@@ -23,7 +23,6 @@ import java.nio.file.Files;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompleter {
     // 默认保守值（config 可覆盖）
@@ -121,7 +120,7 @@ public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompl
         // 作者名长度与非法字符检查（移除换行等）
         author = author.replaceAll("[\\r\\n]+", " ").trim();
         if (author.codePointCount(0, author.length()) > MAX_AUTHOR_LENGTH) {
-            author = truncateByCodePoints(author, MAX_AUTHOR_LENGTH);
+            author = TextUtils.truncateByCodePoints(author, MAX_AUTHOR_LENGTH);
         }
 
         File file = new File(rawFileName);
@@ -207,7 +206,7 @@ public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompl
                     return;
                 }
 
-                List<String> pages = splitToPagesSafe(content, finalMaxCharsPerPage, splitStrategy, pageMarker, finalMaxLinesPerPage, preserveNewlines, trimTrailingEmptyPages);
+                List<String> pages = TextUtils.splitToPagesSafe(content, finalMaxCharsPerPage, splitStrategy, pageMarker, finalMaxLinesPerPage, preserveNewlines, trimTrailingEmptyPages);
 
                 final List<String> finalPages = pages;
 
@@ -220,10 +219,10 @@ public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompl
                             return;
                         }
 
-                        String title = extractTitleFromFileName(finalFile.getName());
+                        String title = TextUtils.extractTitleFromFileName(finalFile.getName());
                         if (title.isEmpty()) title = "Book";
                         if (title.codePointCount(0, title.length()) > MAX_TITLE_LENGTH) {
-                            title = truncateByCodePoints(title, MAX_TITLE_LENGTH);
+                            title = TextUtils.truncateByCodePoints(title, MAX_TITLE_LENGTH);
                         }
                         title = title.replaceAll("[\\r\\n]+", " ").trim();
 
@@ -275,9 +274,10 @@ public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompl
                             }
                             if (player == null) {
                                 // 最后尝试使用 sender 强转（在同步任务内一般是安全的）
-                                if (sender instanceof Player sp) player = sp;
+                                Player sp = (Player) sender;
+                                player = sp;
                             }
-                            if (player == null || !player.isOnline()) {
+                            if (!player.isOnline()) {
                                 // 无法给在线玩家，改为记录并告知
                                 sender.sendMessage("§c目标玩家不在线或无法获取，书已保存在服务器日志（请手动分发）。");
                                 getLogger().info("无法交付书给玩家（可能已下线）： " + finalFile.getPath() + " (作者: " + finalAuthor + ", 页数: " + finalPages.size() + ")");
@@ -310,158 +310,6 @@ public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompl
         });
 
         return true;
-    }
-
-    private static List<String> splitToPagesSafe(String text, int maxChars, String strategy, String pageMarker, int maxLines, boolean preserveNewlines, boolean trimTrailingEmptyPages) {
-        LinkedList<String> pages = new LinkedList<>();
-        if (text == null) {
-            pages.add("");
-            return pages;
-        }
-
-        // 统一换行为 \n
-        text = text.replace("\r\n", "\n").replace('\r', '\n');
-
-        switch (strategy == null ? "smart" : strategy) {
-            case "marker": {
-                String[] segments = text.split(java.util.regex.Pattern.quote(pageMarker), -1);
-                for (String seg : segments) {
-                    if (seg.isEmpty()) {
-                        pages.add("");
-                        continue;
-                    }
-                    List<String> segPages = splitToPagesSafe(seg, maxChars, "smart", pageMarker, maxLines, preserveNewlines, trimTrailingEmptyPages);
-                    pages.addAll(segPages);
-                }
-                break;
-            }
-
-            case "lines": {
-                String[] lines = text.split("\n", -1);
-                StringBuilder sb = new StringBuilder();
-                int lineCount = 0;
-                for (int i = 0; i < lines.length; i++) {
-                    String line = lines[i];
-                    if (sb.length() > 0) {
-                        sb.append("\n");
-                    }
-                    sb.append(line);
-                    lineCount++;
-                    boolean isLastLine = (i == lines.length - 1);
-                    if (lineCount >= maxLines || isLastLine) {
-                        String pageText = sb.toString();
-                        if (pageText.codePointCount(0, pageText.length()) <= maxChars) {
-                            pages.add(preserveNewlines ? pageText : trimTrailingNewlines(pageText));
-                        } else {
-                            pages.addAll(splitToPagesSafe(pageText, maxChars, "smart", pageMarker, maxLines, preserveNewlines, trimTrailingEmptyPages));
-                        }
-                        sb.setLength(0);
-                        lineCount = 0;
-                    }
-                }
-                break;
-            }
-
-            case "hard": {
-                int pos = 0;
-                int len = text.length();
-                while (pos < len) {
-                    // 基于 code point 安全分割
-                    int remainingCp = text.codePointCount(pos, len);
-                    int takeCp = Math.min(maxChars, remainingCp);
-                    int end = text.offsetByCodePoints(pos, takeCp);
-                    String piece = text.substring(pos, end);
-                    pages.add(preserveNewlines ? piece : trimTrailingNewlines(piece));
-                    pos = end;
-                }
-                break;
-            }
-
-            case "smart":
-            default: {
-                if (text.isEmpty()) {
-                    pages.add("");
-                    break;
-                }
-                int p = 0;
-                int l = text.length();
-                while (p < l) {
-                    // 基于 code point 计算 end 索引，避免截断代理对
-                    int remainingCp = text.codePointCount(p, l);
-                    int takeCp = Math.min(maxChars, remainingCp);
-                    int end = text.offsetByCodePoints(p, takeCp);
-
-                    if (end >= l) {
-                        String last = text.substring(p, l);
-                        pages.add(preserveNewlines ? last : trimTrailingNewlines(last));
-                        break;
-                    }
-
-                    // 优先按最近换行分割（保留换行到当前页末）
-                    int lastNewline = lastIndexOfChar(text, '\n', end - 1);
-                    if (lastNewline >= p) {
-                        String part = text.substring(p, lastNewline + 1);
-                        pages.add(preserveNewlines ? part : trimTrailingNewlines(part));
-                        p = lastNewline + 1;
-                        continue;
-                    }
-
-                    // 否则按空格分割以避免断字；如果没有空格则硬切
-                    int lastSpace = lastIndexOfChar(text, ' ', end - 1);
-                    if (lastSpace >= p) {
-                        // 保留空格在当前页末尾，避免丢字
-                        String part = text.substring(p, lastSpace + 1);
-                        pages.add(preserveNewlines ? part : trimTrailingNewlines(part));
-                        p = lastSpace + 1;
-                        continue;
-                    }
-
-                    String part = text.substring(p, end);
-                    pages.add(preserveNewlines ? part : trimTrailingNewlines(part));
-                    p = end;
-                }
-                break;
-            }
-        }
-
-        // 根据配置决定是否删除末尾显式空页
-        if (trimTrailingEmptyPages) {
-            while (!pages.isEmpty() && pages.getLast().isEmpty()) {
-                pages.removeLast();
-            }
-            if (pages.isEmpty()) pages.add("");
-        }
-
-        return pages;
-    }
-
-    private static String trimTrailingNewlines(String s) {
-        if (s == null || s.isEmpty()) return "";
-        return TRAILING_NEWLINES.matcher(s).replaceFirst("");
-    }
-
-    private static int lastIndexOfChar(String s, char c, int fromIndexInclusive) {
-        // 这里 fromIndexInclusive 为包含右边界的索引（与 String.lastIndexOf 的语义一致）
-        if (fromIndexInclusive < 0) return -1;
-        if (fromIndexInclusive >= s.length()) fromIndexInclusive = s.length() - 1;
-        return s.lastIndexOf(c, fromIndexInclusive);
-    }
-
-    private static String extractTitleFromFileName(String fileName) {
-        if (fileName == null) return "Book";
-        int dot = fileName.lastIndexOf('.');
-        if (dot > 0) {
-            return fileName.substring(0, dot);
-        }
-        return fileName;
-    }
-
-    private static String truncateByCodePoints(String s, int maxCodePoints) {
-        if (s == null) return "";
-        int cpCount = s.codePointCount(0, s.length());
-        if (cpCount <= maxCodePoints) return s;
-        int endIndex = s.offsetByCodePoints(0, maxCodePoints);
-        return s.substring(0, endIndex);
     }
 
     @Override
