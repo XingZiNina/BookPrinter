@@ -1,0 +1,46 @@
+prefix: "&e[BookPrinter] &r"
+
+# Common
+no_permission: "&cYou do not have permission."
+unknown_command: "&cUnknown subcommand."
+reload_success: "&aConfiguration and language files reloaded."
+start_generating: "&eReading and generating book, please wait..."
+
+# Info Command
+info_header: "&6========== [BookPrinter] =========="
+info_mode: "&eCurrent Mode: &a{mode}"
+info_lang: "&eLanguage: &a{lang}"
+info_max_bytes: "&eMax File Size: &a{size}"
+info_version: "&eVersion: &a{version}"
+info_footer: "&6=================================="
+
+# Usage
+usage_main: "&eUsage: /bookprinter <filename> [author]"
+usage_mode: "&7Current mode: &e{mode}"
+
+# File/Path Errors
+path_invalid: "&cInvalid path characters or access denied."
+path_no_absolute: "&cClassic mode does not allow absolute paths."
+path_no_subdir: "&cClassic mode does not allow subdirs by default. Check config."
+file_not_found: "&cFile not found: &f{file}"
+file_too_large: "&cFile too large (&e{size}&c bytes). Limit is &e{limit}&c bytes."
+io_error: "&cIO Error: &f{error}"
+
+# Results
+success: "&aBook generated successfully!"
+success_detail: "&eFile: &f{file} &7(Pages: &e{pages}&7)"
+inventory_full: "&cInventory full, book dropped at your feet."
+console_generated: "&aBook generated for console (cannot give item)."
+
+# Internal
+internal_error: "&cInternal error occurred while generating book. Check logs."
+
+# Server Logs
+log_plugin_enabled: "[BookPrinter] Plugin enabled."
+log_dir_failed: "[BookPrinter] Failed to create plugin data directory: {path}"
+log_command_not_found: "[BookPrinter] Command not registered in plugin.yml!"
+log_lang_loaded: "[BookPrinter] Loaded language: {lang}"
+log_path_denied: "[BookPrinter] Blocked illegal path access: {path}"
+log_player_offline: "[BookPrinter] Player {name} went offline generation."
+log_parse_error: "[BookPrinter] Text parsing failed ({mode} mode) for {file}"
+log_io_error: "[BookPrinter] Reading IOException: {file}"

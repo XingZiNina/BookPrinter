@@ -1,9 +1,0 @@
-max_chars_per_page: 165
-split_strategy: "smart" # 可选: marker, lines, hard, smart
-page_marker: "---PAGE---"
-max_lines_per_page: 14
-preserve_newlines: true
-allow_absolute_paths: false
-allow_subdirs: false
-trim_trailing_empty_pages: false
-max_file_bytes: 2097152

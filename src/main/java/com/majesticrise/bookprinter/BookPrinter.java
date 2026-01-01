@@ -9,327 +9,353 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BookMeta;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.configuration.ConfigurationSection;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.logging.Level;
-import java.util.regex.Pattern;
 
-public class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompleter {
-    // 默认保守值（config 可覆盖）
-    private static final int DEFAULT_MAX_CHARS = 256;
-    private static final int DEFAULT_MAX_LINES = 14; // 仅在 lines 策略下使用
-    private static final int MAX_TITLE_LENGTH = 32;
-    private static final int MAX_AUTHOR_LENGTH = 32;
-    private static final long DEFAULT_MAX_FILE_BYTES = 2L * 1024 * 1024; // 默认最大文件 2MB，配置可覆盖
-    // 解析颜色/格式化代码的 serializer（使用 § 风格）
-    private static final LegacyComponentSerializer COMPONENT_SERIALIZER = LegacyComponentSerializer.legacySection();
+public final class BookPrinter extends JavaPlugin implements CommandExecutor, TabCompleter {
 
-    // 预编译正则
-    private static final Pattern TRAILING_NEWLINES = Pattern.compile("[\\n\\r]+$");
+    private static final String LATEST_CONFIG_VERSION = "2.0";
+    private LanguageManager languageManager;
 
     @Override
     public void onEnable() {
-        File data = getDataFolder();
-        if (!data.exists() && !data.mkdirs()) {
-            getLogger().log(Level.SEVERE, "无法创建插件数据目录: " + data.getAbsolutePath());
+        File dataFolder = getDataFolder();
+        if (!dataFolder.exists() && !dataFolder.mkdirs()) {
+            Bukkit.getPluginManager().disablePlugin(this);
+            return;
         }
 
+        ensureLanguageFilesExist();
         saveDefaultConfig();
+        checkConfigUpdate();
+        reloadConfig();
+
+        this.languageManager = new LanguageManager(this);
+        languageManager.load();
 
         PluginCommand cmd = getCommand("bookprinter");
         if (cmd != null) {
             cmd.setExecutor(this);
             cmd.setTabCompleter(this);
+        }
+
+        getLogger().info(languageManager.getRaw("log_plugin_enabled"));
+    }
+
+    private void ensureLanguageFilesExist() {
+        if (new File(getDataFolder(), "Language-zh_CN.yml").exists()) {
+            saveResource("Language-zh_CN.yml", true);
         } else {
-            getLogger().warning("命令 bookprinter 未在 plugin.yml 中注册。");
+            saveResource("Language-zh_CN.yml", false);
+        }
+
+        if (new File(getDataFolder(), "Language-en_US.yml").exists()) {
+            saveResource("Language-en_US.yml", true);
+        } else {
+            saveResource("Language-en_US.yml", false);
+        }
+    }
+
+    private void checkConfigUpdate() {
+        File currentConfigFile = new File(getDataFolder(), "config.yml");
+        if (!currentConfigFile.exists()) return;
+
+        try {
+            FileConfiguration currentConfig = YamlConfiguration.loadConfiguration(currentConfigFile);
+            String currentVersion = currentConfig.getString("config_version", "1.0");
+
+            if (!LATEST_CONFIG_VERSION.equals(currentVersion)) {
+                File backupFile = new File(getDataFolder(), "config_old_" + System.currentTimeMillis() + ".yml");
+                if (currentConfigFile.renameTo(backupFile)) {
+                    saveDefaultConfig();
+                    String msg = languageManager.getRaw("log_config_updated");
+                    getLogger().warning(msg);
+                    reloadConfig();
+                }
+            }
+        } catch (Exception e) {
+            getLogger().log(Level.WARNING, "Failed to check config version", e);
         }
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
                              @NotNull String label, @NotNull String @NotNull [] args) {
-        if (args.length >= 1 && args[0].equalsIgnoreCase("reload")) {
-            if (!sender.hasPermission("bookprinter.reload")) {
-                sender.sendMessage("§c你没有权限重载配置。");
+
+        if (args.length >= 1) {
+            if (args[0].equalsIgnoreCase("reload")) {
+                if (!checkPermission(sender, "bookprinter.reload")) return true;
+                reloadConfig();
+                checkConfigUpdate();
+                languageManager.reload();
+                sender.sendMessage(languageManager.get("reload_success"));
                 return true;
             }
-            reloadConfig();
-            sender.sendMessage("§aBookPrinter 配置已重载。");
-            return true;
+
+            if (args[0].equalsIgnoreCase("info")) {
+                if (!checkPermission(sender, "bookprinter.info")) return true;
+                sendInfo(sender);
+                return true;
+            }
         }
 
-        if (!sender.hasPermission("bookprinter.use")) {
-            sender.sendMessage("§c你没有权限使用此命令。");
-            return true;
-        }
+        if (!checkPermission(sender, "bookprinter.use")) return true;
 
         if (args.length == 0) {
-            sender.sendMessage("§e用法: /bookprinter <文件名或绝对路径> [署名]");
-            sender.sendMessage("§e可通过 plugins/BookPrinter/config.yml 调整分页配置，或使用 /bookprinter reload 重载。");
+            sendUsage(sender);
             return true;
         }
 
-        // 配置选项
-        int maxCharsPerPage = getConfig().getInt("max_chars_per_page", DEFAULT_MAX_CHARS);
-        String splitStrategy = Optional.ofNullable(getConfig().getString("split_strategy")).orElse("smart").toLowerCase(Locale.ROOT);
-        String pageMarker = Optional.ofNullable(getConfig().getString("page_marker")).orElse("---PAGE---");
-        int maxLinesPerPage = getConfig().getInt("max_lines_per_page", DEFAULT_MAX_LINES);
-        boolean preserveNewlines = getConfig().getBoolean("preserve_newlines", true);
-        boolean allowAbsolute = getConfig().getBoolean("allow_absolute_paths", false);
-        boolean allowSubdirs = getConfig().getBoolean("allow_subdirs", false);
-        boolean trimTrailingEmptyPages = getConfig().getBoolean("trim_trailing_empty_pages", false);
-        long maxFileBytes = getConfig().getLong("max_file_bytes", DEFAULT_MAX_FILE_BYTES);
+        final ConfigurationSection config = getConfig();
+        final String mode = config.getString("Switch-mode", "classic").toLowerCase(Locale.ROOT);
+        final long maxSizeBytes = config.getLong("max_file_bytes", 2097152);
+        final boolean isClassic = "classic".equals(mode);
 
-        String rawFileName = args[0];
-        if (!rawFileName.toLowerCase(Locale.ROOT).endsWith(".txt")) {
-            rawFileName = rawFileName + ".txt";
+        String rawInput = args[0];
+        final String fileName = rawInput.toLowerCase(Locale.ROOT).endsWith(".txt")
+                ? rawInput
+                : rawInput + ".txt";
+
+        if (fileName.contains("../")) {
+            sender.sendMessage(languageManager.get("path_invalid"));
+            return true;
         }
 
-        // 防止用户故意输入包含路径分隔符绕过，除非允许子目录
-        if (!allowSubdirs) {
-            if (rawFileName.contains(File.separator) || rawFileName.contains("/") || rawFileName.contains("\\")) {
-                sender.sendMessage("§c文件名不能包含路径。若想使用子目录请在配置中允许 allow_subdirs。");
+        if (isClassic) {
+            ConfigurationSection classicCfg = config.getConfigurationSection("classic");
+            boolean allowSubdirs = classicCfg != null && classicCfg.getBoolean("allow_subdirs", false);
+            if (!allowSubdirs && (fileName.contains("/") || fileName.contains("\\"))) {
+                sender.sendMessage(languageManager.get("path_no_subdir"));
                 return true;
             }
         }
 
-        String author;
-        UUID authorUuid = null;
+        String potentialAuthor = null;
+        UUID potentialUuid = null;
+
         if (args.length >= 2) {
-            StringJoiner sj = new StringJoiner(" ");
-            for (int i = 1; i < args.length; i++) sj.add(args[i]);
-            author = sj.toString();
+            potentialAuthor = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
         } else if (sender instanceof Player p) {
-            author = p.getName();
-            authorUuid = p.getUniqueId();
-        } else {
-            sender.sendMessage("§c控制台执行时必须提供署名：/bookprinter <文件> <署名>");
+            potentialAuthor = p.getName();
+            potentialUuid = p.getUniqueId();
+        }
+
+        if (potentialAuthor == null) {
+            sender.sendMessage(languageManager.get("usage_main"));
             return true;
         }
 
-        // 作者名长度与非法字符检查（移除换行等）
-        author = author.replaceAll("[\\r\\n]+", " ").trim();
-        if (author.codePointCount(0, author.length()) > MAX_AUTHOR_LENGTH) {
-            author = TextUtils.truncateByCodePoints(author, MAX_AUTHOR_LENGTH);
-        }
+        final String author = potentialAuthor.replaceAll("[\r\n]", " ").trim();
+        final String finalAuthor = author.length() > 32 ? author.substring(0, 32) : author;
+        final UUID playerUuid = potentialUuid;
 
-        File file = new File(rawFileName);
-        if (!file.isAbsolute()) {
-            file = new File(getDataFolder(), rawFileName);
+        File userFile = new File(fileName);
+        if (!userFile.isAbsolute()) {
+            userFile = new File(getDataFolder(), fileName);
         } else {
-            if (!allowAbsolute) {
-                sender.sendMessage("§c不允许使用绝对路径读取文件。请移动文件到插件数据目录或在配置中启用 allow_absolute_paths。");
+            boolean allowAbs = isClassic && config.getConfigurationSection("classic") != null &&
+                    config.getConfigurationSection("classic").getBoolean("allow_absolute_paths", false);
+            if (!allowAbs) {
+                sender.sendMessage(languageManager.get("path_no_absolute"));
                 return true;
             }
         }
 
-        // 规范化并检查路径是否在 data folder 下（当不允许绝对路径或不允许越界时）
+        final File targetFile;
         try {
-            File dataFolder = getDataFolder().getCanonicalFile();
-            File canonical = file.getCanonicalFile();
-            if (!allowSubdirs) {
-                // 仅允许直接位于 dataFolder 下
-                if (!Objects.equals(canonical.getParentFile(), dataFolder)) {
-                    sender.sendMessage("§c仅允许读取插件数据目录下的文件（不允许子目录）。");
-                    return true;
-                }
-            } else {
-                // 允许子目录，但仍禁止越出 data folder
-                if (!canonical.getPath().startsWith(dataFolder.getPath())) {
-                    sender.sendMessage("§c禁止访问插件数据目录外的路径。");
-                    return true;
-                }
+            File dataFolderCanonical = getDataFolder().getCanonicalFile();
+            File targetFileCanonical = userFile.getCanonicalFile();
+
+            if (!targetFileCanonical.toPath().startsWith(dataFolderCanonical.toPath())) {
+                sender.sendMessage(languageManager.get("path_invalid"));
+                String path = userFile.getPath();
+                String logMsg = languageManager.getRaw("log_path_denied", Map.of("path", path != null ? path : "unknown"));
+                getLogger().warning(logMsg);
+                return true;
             }
+            targetFile = targetFileCanonical;
         } catch (IOException e) {
-            getLogger().log(Level.WARNING, "校验文件路径时发生错误: " + file.getPath(), e);
-            sender.sendMessage("§c无法校验文件路径，请检查服务端日志。");
+            getLogger().log(Level.WARNING, "Path parsing error", e);
+            sender.sendMessage(languageManager.get("path_invalid"));
             return true;
         }
 
-        final File finalFile = file;
-        final String finalAuthor = author;
-        final UUID finalAuthorUuid = authorUuid;
+        sender.sendMessage(languageManager.get("start_generating"));
 
-        if (maxCharsPerPage <= 0) maxCharsPerPage = DEFAULT_MAX_CHARS;
-        if (maxLinesPerPage <= 0) maxLinesPerPage = DEFAULT_MAX_LINES;
-
-        if (maxCharsPerPage > DEFAULT_MAX_CHARS) {
-            sender.sendMessage("§6注意：已设置每页字符数为 " + maxCharsPerPage + "。建议使用 marker 或更多页来分割内容。");
-        }
-
-        // 任务开始提示
-        if (sender instanceof Player) {
-            sender.sendMessage("§e开始生成书: §f" + finalFile.getName());
-        } else {
-            sender.sendMessage("§e开始生成书: §f" + finalFile.getPath());
-        }
-
-        int finalMaxCharsPerPage = maxCharsPerPage;
-        int finalMaxLinesPerPage = maxLinesPerPage;
-        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+        Bukkit.getAsyncScheduler().runNow(this, (task) -> {
             try {
-                if (!finalFile.exists() || !finalFile.isFile()) {
-                    Bukkit.getScheduler().runTask(this, () -> sender.sendMessage("§c文件不存在或不是文件: " + finalFile.getPath()));
-                    return;
-                }
-
-                // 文件大小检查（避免一次读取超大文件）
-                try {
-                    long size = Files.size(finalFile.toPath());
-                    if (size > maxFileBytes) {
-                        Bukkit.getScheduler().runTask(this, () -> sender.sendMessage("§c文件太大（> " + maxFileBytes + " bytes），拒绝处理。"));
-                        getLogger().warning("拒绝处理过大的文件: " + finalFile.getPath() + " (" + size + " bytes)");
-                        return;
-                    }
-                } catch (IOException e) {
-                    // 无法获取大小，记录并继续尝试读取，但捕获失败
-                    getLogger().log(Level.WARNING, "无法获取文件大小: " + finalFile.getPath(), e);
-                }
-
-                String content;
-                try {
-                    content = Files.readString(finalFile.toPath(), StandardCharsets.UTF_8);
-                } catch (IOException e) {
-                    String msg = "§c读取文件出错: " + (e.getMessage() == null ? "I/O 错误" : e.getMessage());
-                    Bukkit.getScheduler().runTask(this, () -> sender.sendMessage(msg));
-                    getLogger().log(Level.SEVERE, "无法读取文件 " + finalFile.getPath(), e);
-                    return;
-                }
-
-                List<String> pages = TextUtils.splitToPagesSafe(content, finalMaxCharsPerPage, splitStrategy, pageMarker, finalMaxLinesPerPage, preserveNewlines, trimTrailingEmptyPages);
-
-                final List<String> finalPages = pages;
-
-                Bukkit.getScheduler().runTask(this, () -> {
-                    try {
-                        ItemStack book = new ItemStack(org.bukkit.Material.WRITTEN_BOOK, 1);
-                        BookMeta meta = (BookMeta) book.getItemMeta();
-                        if (meta == null) {
-                            sender.sendMessage("§c插件内部错误：无法创建书的元数据。");
-                            return;
-                        }
-
-                        String title = TextUtils.extractTitleFromFileName(finalFile.getName());
-                        if (title.isEmpty()) title = "Book";
-                        if (title.codePointCount(0, title.length()) > MAX_TITLE_LENGTH) {
-                            title = TextUtils.truncateByCodePoints(title, MAX_TITLE_LENGTH);
-                        }
-                        title = title.replaceAll("[\\r\\n]+", " ").trim();
-
-                        Component titleComponent = COMPONENT_SERIALIZER.deserialize(title);
-                        Component authorComponent = COMPONENT_SERIALIZER.deserialize(finalAuthor);
-
-                        List<Component> pageComponents = new ArrayList<>();
-                        for (String p : finalPages) {
-                            String safe = p == null ? "" : p;
-                            // 若 preserveNewlines 为 false，已经在 splitToPagesSafe 中处理
-                            try {
-                                // 优先尝试解析颜色代码，如果失败则直接使用纯文本 Component 回退（不做 §->& 替换）
-                                pageComponents.add(COMPONENT_SERIALIZER.deserialize(safe));
-                            } catch (Throwable t) {
-                                getLogger().log(Level.WARNING, "解析页组件失败，使用纯文本回退。页内容可能包含不可解析的字符。", t);
-                                pageComponents.add(Component.text(safe));
-                            }
-                        }
-
-                        // 设置标题与作者（注意：Paper 1.21.5 支持 Component）
-                        meta.title(titleComponent);
-                        meta.author(authorComponent);
-
-                        try {
-                            meta.pages(pageComponents);
-                            book.setItemMeta(meta);
-                        } catch (Throwable t) {
-                            // 设置 pages 可能因长度等原因失败，尝试按页纯文本截断并重试
-                            getLogger().log(Level.WARNING, "设置书页时失败，尝试截断每页再重试。", t);
-                            List<Component> truncated = new ArrayList<>();
-                            for (String s : finalPages) {
-                                String plain = s == null ? "" : s;
-                                // 基于 code point 做安全截断，避免破坏代理对
-                                int allowed = Math.max(1, finalMaxCharsPerPage);
-                                if (plain.codePointCount(0, plain.length()) > allowed) {
-                                    int end = plain.offsetByCodePoints(0, allowed);
-                                    plain = plain.substring(0, end);
-                                }
-                                truncated.add(Component.text(plain));
-                            }
-                            meta.pages(truncated);
-                            book.setItemMeta(meta);
-                        }
-
-                        if (sender instanceof Player) {
-                            Player player = null;
-                            if (finalAuthorUuid != null) {
-                                player = Bukkit.getPlayer(finalAuthorUuid);
-                            }
-                            if (player == null) {
-                                // 最后尝试使用 sender 强转（在同步任务内一般是安全的）
-                                Player sp = (Player) sender;
-                                player = sp;
-                            }
-                            if (!player.isOnline()) {
-                                // 无法给在线玩家，改为记录并告知
-                                sender.sendMessage("§c目标玩家不在线或无法获取，书已保存在服务器日志（请手动分发）。");
-                                getLogger().info("无法交付书给玩家（可能已下线）： " + finalFile.getPath() + " (作者: " + finalAuthor + ", 页数: " + finalPages.size() + ")");
-                                return;
-                            }
-
-                            Map<Integer, ItemStack> leftover = player.getInventory().addItem(book);
-                            if (leftover.isEmpty()) {
-                                player.sendMessage("§a已将书放入你的背包: §e" + finalFile.getName() + " §7(共 " + finalPages.size() + " 页)");
-                            } else {
-                                Location loc = player.getLocation();
-                                player.getWorld().dropItemNaturally(loc, book);
-                                player.sendMessage("§a背包空间不足，书已掉落在你脚下: §e" + finalFile.getName() + " §7(共 " + finalPages.size() + " 页)");
-                            }
-                            player.sendMessage("§a生成完成: §f" + finalFile.getName() + " §7(共 " + finalPages.size() + " 页)");
-                        } else {
-                            sender.sendMessage("§a已为控制台/命令来源生成书（无法直接给予）： §e" + finalFile.getPath() + " §7(共 " + finalPages.size() + " 页)");
-                            getLogger().info("已为控制台生成书: " + finalFile.getPath() + " (作者: " + finalAuthor + ", 页数: " + finalPages.size() + ")");
-                        }
-                    } catch (Throwable t) {
-                        getLogger().log(Level.SEVERE, "在主线程处理书本时发生意外错误", t);
-                        sender.sendMessage("§c生成书时发生内部错误，请查看服务器日志。");
-                    }
-                });
-            } catch (Throwable ex) {
-                // 异步任务总体异常处理，确保用户被告知
-                getLogger().log(Level.SEVERE, "生成书的异步任务失败", ex);
-                Bukkit.getScheduler().runTask(this, () -> sender.sendMessage("§c生成书时发生内部错误，请查看服务器日志。"));
+                handleGenerationAsync(sender, targetFile, finalAuthor, mode, maxSizeBytes);
+            } catch (Exception e) {
+                getLogger().log(Level.SEVERE, languageManager.getRaw("log_task_exception"), e);
+                scheduleGlobal(() -> sender.sendMessage(languageManager.get("internal_error")));
             }
         });
 
         return true;
     }
 
+    private void sendInfo(CommandSender sender) {
+        ConfigurationSection config = getConfig();
+        long maxBytes = config.getLong("max_file_bytes", 2097152);
+        // 字节转MB显示
+        double mb = maxBytes / (1024.0 * 1024.0);
+        String sizeStr = String.format("%.2f MB", mb);
+
+        String mode = config.getString("Switch-mode", "classic");
+        String lang = config.getString("language", "zh_CN");
+        String version = Bukkit.getServer().getName().contains("Folia") ? (getDescription().getVersion() + " (Folia)") : getDescription().getVersion();
+
+        sender.sendMessage(languageManager.get("info_header"));
+        sender.sendMessage(languageManager.get("info_mode", Map.of("mode", mode)));
+        sender.sendMessage(languageManager.get("info_lang", Map.of("lang", lang)));
+        sender.sendMessage(languageManager.get("info_max_bytes", Map.of("size", sizeStr)));
+        sender.sendMessage(languageManager.get("info_version", Map.of("version", version)));
+        sender.sendMessage(languageManager.get("info_footer"));
+    }
+
+    private void handleGenerationAsync(CommandSender sender, File file, String author, String mode, long limit) {
+        try {
+            if (!file.exists() || !file.isFile()) {
+                scheduleGlobal(() -> sender.sendMessage(languageManager.get("file_not_found")));
+                return;
+            }
+
+            long size = Files.size(file.toPath());
+            if (size > limit) {
+                var map = Map.of("size", String.valueOf(size), "limit", String.valueOf(limit));
+                scheduleGlobal(() -> sender.sendMessage(languageManager.get("file_too_large", map)));
+                return;
+            }
+
+            String content = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+            List<Component> pages;
+
+            try {
+                pages = "modern".equals(mode)
+                        ? TextUtils.parseModernMode(content, getConfig())
+                        : TextUtils.parseClassicMode(content, getConfig());
+            } catch (Exception e) {
+                String fname = file.getName();
+                String msg = languageManager.getRaw("log_parse_error", Map.of("mode", mode, "file", fname != null ? fname : "unknown"));
+                getLogger().severe(msg);
+                getLogger().log(Level.SEVERE, "Parse details", e);
+                scheduleGlobal(() -> sender.sendMessage(languageManager.get("internal_error")));
+                return;
+            }
+
+            if (sender instanceof Player player) {
+                Location loc = player.getLocation();
+                Bukkit.getRegionScheduler().execute(this, loc, () -> giveBookToPlayer(player, file.getName(), author, pages));
+            } else {
+                String pageCount = String.valueOf(pages.size());
+                scheduleGlobal(() -> sender.sendMessage(languageManager.get("console_generated", Map.of("pages", pageCount))));
+            }
+
+        } catch (IOException e) {
+            String fname = file.getName();
+            String msg = languageManager.getRaw("log_io_error", Map.of("file", fname != null ? fname : "unknown"));
+            getLogger().log(Level.WARNING, msg, e);
+            scheduleGlobal(() -> sender.sendMessage(languageManager.get("io_error")));
+        }
+    }
+
+    private void giveBookToPlayer(Player player, String fileName, String author, List<Component> pages) {
+        if (!player.isOnline()) {
+            String name = player.getName();
+            getLogger().info(languageManager.getRaw("log_player_offline", Map.of("name", name)));
+            return;
+        }
+
+        try {
+            ItemStack book = createBookItem(fileName, author, pages);
+            Map<Integer, ItemStack> leftover = player.getInventory().addItem(book);
+
+            if (leftover.isEmpty()) {
+                player.sendMessage(languageManager.get("success"));
+                var map = Map.of("file", fileName, "pages", String.valueOf(pages.size()));
+                player.sendMessage(languageManager.get("success_detail", map));
+            } else {
+                player.getWorld().dropItemNaturally(player.getLocation(), book);
+                player.sendMessage(languageManager.get("inventory_full"));
+            }
+
+        } catch (Exception e) {
+            getLogger().log(Level.SEVERE, languageManager.getRaw("log_give_error"), e);
+            player.sendMessage(languageManager.get("internal_error"));
+        }
+    }
+
+    private ItemStack createBookItem(String fileName, String author, List<Component> pages) {
+        ItemStack book = new ItemStack(org.bukkit.Material.WRITTEN_BOOK, 1);
+        BookMeta meta = (BookMeta) book.getItemMeta();
+        if (meta == null) return book;
+
+        String title = TextUtils.extractTitleFromFileName(fileName);
+        meta.title(LegacyComponentSerializer.legacySection().deserialize(title));
+        meta.author(LegacyComponentSerializer.legacySection().deserialize(author));
+        meta.pages(pages);
+        book.setItemMeta(meta);
+        return book;
+    }
+
+    private boolean checkPermission(CommandSender sender, String perm) {
+        if (sender.hasPermission(perm)) return true;
+        sender.sendMessage(languageManager.get("no_permission"));
+        return false;
+    }
+
+    private void sendUsage(CommandSender sender) {
+        sender.sendMessage(languageManager.get("usage_main"));
+        String mode = getConfig().getString("Switch-mode", "classic");
+        sender.sendMessage(languageManager.get("usage_mode", Map.of("mode", mode)));
+    }
+
+    private void scheduleGlobal(Runnable task) {
+        if (Bukkit.isPrimaryThread()) {
+            task.run();
+        } else {
+            Bukkit.getGlobalRegionScheduler().execute(this, task);
+        }
+    }
+
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                                 @NotNull String alias, @NotNull String @NotNull [] args) {
         List<String> completions = new ArrayList<>();
+
         if (args.length == 1) {
+            String input = args[0].toLowerCase(Locale.ROOT);
+
+            if ("reload".startsWith(input)) completions.add("reload");
+            if ("info".startsWith(input)) completions.add("info");
+
             File dir = getDataFolder();
             if (dir.exists()) {
                 File[] files = dir.listFiles((d, name) -> name.toLowerCase(Locale.ROOT).endsWith(".txt"));
                 if (files != null) {
-                    String prefix = args[0].toLowerCase(Locale.ROOT);
                     for (File f : files) {
                         String name = f.getName();
-                        if (name.toLowerCase(Locale.ROOT).startsWith(prefix)) completions.add(name);
+                        if (input.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(input)) {
+                            completions.add(name);
+                        }
                     }
                 }
             }
         }
-        return completions;
 
+        return completions;
     }
 }

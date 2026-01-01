@@ -1,9 +1,61 @@
-max_chars_per_page: 165
-split_strategy: "smart" # 可选: marker, lines, hard, smart
-page_marker: "---PAGE---"
-max_lines_per_page: 14
-preserve_newlines: true
-allow_absolute_paths: false
-allow_subdirs: false
-trim_trailing_empty_pages: false
+# ============================================
+# BookPrinter 配置文件
+# ============================================
+# 语言设置: "zh_CN" (简体中文) 或 "en_US" (English)
+# 语言文件位于插件目录下的 Language-zh_CN.yml
+language: "zh_CN"
+# 插件核心模式选择: "classic" 或 "modern"
+# "classic": 作者写的原模式。支持传统的 & 颜色代码和 &#RRGGBB (Hex)。
+#"modern": 新增功能,专为排版设计,支持classic所有功能。支持 RGB 渐变语法 &#RRGGBB (Hex) 支持传统的 & 颜色代码. 使用 \Line-break\ 强制翻页，\n 强制换行。
+Switch-mode: "modern"
+
+# ============================================
+# Classic 模式配置 ( Switch-mode: "classic" 时生效 )
+# ============================================
+classic:
+  # 每页最大字符数 (包含颜色代码字符)
+  max_chars_per_page: 165
+
+  # 分页策略: "smart" (智能), "lines" (按行数), "hard" (强制切断), "marker" (标记符)
+  split_strategy: "smart"
+
+  # 当 split_strategy 为 "marker" 时，以此字符串作为分页标记
+  page_marker: "---PAGE---"
+
+  # 当 split_strategy 为 "lines" 时，每页最大行数
+  max_lines_per_page: 14
+
+  # 是否保留文本末尾的空行
+  preserve_newlines: true
+
+  # 是否移除最后生成的空白页
+  trim_trailing_empty_pages: false
+
+  # 路径安全设置
+  allow_absolute_paths: false
+  allow_subdirs: false
+
+# ============================================
+# Modern 模式配置 ( Switch-mode: "modern" 时生效 )
+# ============================================
+modern:
+  # Modern 模式下，使用 Paper 的 MiniMessage 格式化引擎。
+  # 这意味着你可以在 TXT 中使用以下高级语法:
+  # <color:#red> 或 <#ff0000> 设置 RGB 颜色
+  # <gradient:#red:#blue>文字</gradient> 制作渐变色
+  # <b>粗体</b>, <i>斜体</i> 等基础格式
+  #
+  # 特殊控制符:
+  # 在 TXT 中写入 \Line-break\  ->  书本的翻页
+  # 在 TXT 中写入 \n            ->  书本的换行
+
+  # 是否在解析前移除多余的空白字符（保留文本流）
+  trim_whitespace: false
+
+# ============================================
+# 通用设置
+# ============================================
+# 允许读取的文件最大大小 (字节), 默认 2MB
 max_file_bytes: 2097152
+# 配置文件版本号，请勿手动修改以避免配置重置
+config_version: "2.0"

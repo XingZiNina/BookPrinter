@@ -1,12 +1,119 @@
 package com.majesticrise.bookprinter;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.ChatColor;
+import org.bukkit.configuration.ConfigurationSection;
+
 import java.util.*;
 import java.util.regex.Pattern;
 
 public final class TextUtils {
 
-    private static final boolean DEBUG = false;
-
     private TextUtils() {}
+
+    private static final Pattern LEGACY_HEX_PATTERN = Pattern.compile("&#([A-Fa-f0-9]{6})");
+    private static final Pattern MODERN_LINE_BREAK = Pattern.compile("\\\\Line-break\\\\");
+    private static final Pattern LEGACY_COLOR_SHORT = Pattern.compile("&([0-9a-fk-or])", Pattern.CASE_INSENSITIVE);
+
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
+    private static final LegacyComponentSerializer LEGACY_SERIALIZER = LegacyComponentSerializer.legacySection();
+
+    private static final Map<String, String> LEGACY_MAP = Map.ofEntries(
+            Map.entry("0", "<black>"), Map.entry("1", "<dark_blue>"),
+            Map.entry("2", "<dark_green>"), Map.entry("3", "<dark_aqua>"),
+            Map.entry("4", "<dark_red>"), Map.entry("5", "<dark_purple>"),
+            Map.entry("6", "<gold>"), Map.entry("7", "<gray>"),
+            Map.entry("8", "<dark_gray>"), Map.entry("9", "<blue>"),
+            Map.entry("a", "<green>"), Map.entry("b", "<aqua>"),
+            Map.entry("c", "<red>"), Map.entry("d", "<light_purple>"),
+            Map.entry("e", "<yellow>"), Map.entry("f", "<white>"),
+            Map.entry("k", "<obfuscated>"), Map.entry("l", "<bold>"),
+            Map.entry("m", "<strikethrough>"), Map.entry("n", "<underline>"),
+            Map.entry("o", "<italic>"), Map.entry("r", "<reset>")
+    );
+
+    public static List<Component> parseModernMode(String rawText, ConfigurationSection config) {
+        List<Component> pages = new ArrayList<>();
+
+        boolean trimWhitespace = config.getBoolean("modern.trim_whitespace", false);
+        if (trimWhitespace) {
+            rawText = rawText.trim();
+        }
+
+        rawText = rawText.replace("\r", "");
+
+        rawText = rawText.replaceAll("&#([A-Fa-f0-9]{6})", "<color:#$1>");
+
+        for (Map.Entry<String, String> entry : LEGACY_MAP.entrySet()) {
+            rawText = rawText.replace("&" + entry.getKey(), entry.getValue());
+        }
+        for (Map.Entry<String, String> entry : LEGACY_MAP.entrySet()) {
+            rawText = rawText.replace("&" + entry.getKey().toUpperCase(Locale.ROOT), entry.getValue());
+        }
+
+        String[] rawPages = MODERN_LINE_BREAK.split(rawText, -1);
+
+        for (String pageContent : rawPages) {
+            String cleanContent = pageContent.trim();
+
+            if (cleanContent.isEmpty()) {
+                pages.add(Component.empty());
+                continue;
+            }
+
+            cleanContent = cleanContent.replace("\\n", "\n").replace("\\\\n", "\n");
+
+            try {
+                Component pageComponent = MINI_MESSAGE.deserialize(cleanContent);
+                pages.add(pageComponent);
+            } catch (Exception e) {
+                pages.add(Component.text(cleanContent));
+            }
+        }
+        return pages;
+    }
+
+    public static List<Component> parseClassicMode(String rawText, ConfigurationSection config) {
+        ConfigurationSection classic = config.getConfigurationSection("classic");
+        int maxChars = (classic != null) ? classic.getInt("max_chars_per_page", 165) : 165;
+        String strategy = (classic != null) ? classic.getString("split_strategy", "smart") : "smart";
+        String pageMarker = (classic != null) ? classic.getString("page_marker", "---PAGE---") : "---PAGE---";
+        int maxLines = (classic != null) ? classic.getInt("max_lines_per_page", 14) : 14;
+        boolean preserveNewlines = (classic != null) ? classic.getBoolean("preserve_newlines", true) : true;
+        boolean trimEmptyPages = (classic != null) ? classic.getBoolean("trim_trailing_empty_pages", false) : false;
+
+        rawText = rawText.replace("\r", "");
+
+        rawText = ChatColor.translateAlternateColorCodes('&', rawText);
+
+        String hexProcessed = convertHexTags(rawText);
+
+        List<String> pageTexts = splitToPagesSafe(hexProcessed, maxChars, strategy, pageMarker, maxLines, preserveNewlines, trimEmptyPages);
+
+        List<Component> pages = new ArrayList<>();
+        for (String text : pageTexts) {
+            pages.add(LEGACY_SERIALIZER.deserialize(text));
+        }
+        return pages;
+    }
+
+    private static String convertHexTags(String text) {
+        if (text == null || !text.contains("&#")) return text;
+        StringBuffer sb = new StringBuffer();
+        java.util.regex.Matcher m = LEGACY_HEX_PATTERN.matcher(text);
+        while (m.find()) {
+            String hex = m.group(1);
+            StringBuilder hexFormat = new StringBuilder("§x");
+            for (char c : hex.toCharArray()) {
+                hexFormat.append("§").append(c);
+            }
+            m.appendReplacement(sb, hexFormat.toString());
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
 
     public static List<String> splitToPagesSafe(String text, int maxChars, String strategy, String pageMarker, int maxLines, boolean preserveNewlines, boolean trimTrailingEmptyPages) {
         LinkedList<String> pages = new LinkedList<>();
@@ -15,7 +122,6 @@ public final class TextUtils {
             return pages;
         }
 
-        text = text.replace("\r\n", "\n").replace('\r', '\n');
         if (maxChars <= 0) maxChars = 1;
         final int thresholdCp = Math.max(3, maxChars / 8);
         String usedStrategy = (strategy == null) ? "smart" : strategy;
@@ -143,15 +249,9 @@ public final class TextUtils {
             if (pages.isEmpty()) pages.add("");
         }
 
-        if (DEBUG) {
-            int idx = 0;
-            for (String pg : pages) debugPageInfo(idx++, pg);
-        }
-
         return pages;
     }
 
-    // 将 truncateByCodePoints 公开以供其它类使用
     public static String truncateByCodePoints(String s, int maxCodePoints) {
         if (s == null) return null;
         if (maxCodePoints <= 0) return "";
@@ -161,20 +261,14 @@ public final class TextUtils {
         return s.substring(0, endIndex);
     }
 
-    // 如果需要从文件名中提取标题（例如 "my_book_title.txt" -> "My Book Title"）
     public static String extractTitleFromFileName(String fileName) {
         if (fileName == null) return "";
-        // 去掉目录路径
         int lastSep = Math.max(fileName.lastIndexOf('/'), fileName.lastIndexOf('\\'));
         String base = (lastSep >= 0) ? fileName.substring(lastSep + 1) : fileName;
-        // 去掉扩展名
         int dot = base.lastIndexOf('.');
         if (dot > 0) base = base.substring(0, dot);
-        // 替换下划线/破折号为空格，去除多余空白
         base = base.replace('_', ' ').replace('-', ' ').trim();
-        // 规范化多个空格为单个空格
         base = base.replaceAll("\\s+", " ");
-        // 首字母大写（每个单词）
         StringBuilder sb = new StringBuilder();
         String[] parts = base.split(" ");
         for (int i = 0; i < parts.length; i++) {
@@ -191,8 +285,6 @@ public final class TextUtils {
         if (title.isEmpty()) title = "Book";
         return title;
     }
-
-// --------------- 其它辅助方法保持 package-private（private） ---------------
 
     private static int lastIndexOfChar(String s, char c, int fromIndexInclusive) {
         if (s == null || s.isEmpty()) return -1;
@@ -214,29 +306,5 @@ public final class TextUtils {
         }
         if (end == s.length()) return s;
         return s.substring(0, end);
-    }
-
-    private static String safeSubstringByCodePoints(String s, int beginCpIndex, int endCpIndex) {
-        if (s == null) return null;
-        int totalCp = s.codePointCount(0, s.length());
-        if (beginCpIndex < 0) beginCpIndex = 0;
-        if (endCpIndex > totalCp) endCpIndex = totalCp;
-        if (beginCpIndex >= endCpIndex) return "";
-        int beginCharIndex = s.offsetByCodePoints(0, beginCpIndex);
-        int endCharIndex = s.offsetByCodePoints(0, endCpIndex);
-        return s.substring(beginCharIndex, endCharIndex);
-    }
-
-    private static boolean containsColorCodes(String s) {
-        if (s == null || s.isEmpty()) return false;
-        return s.indexOf('§') >= 0;
-    }
-
-    private static void debugPageInfo(int idx, String page) {
-        int cp = (page == null) ? 0 : page.codePointCount(0, page.length());
-        boolean hasColor = containsColorCodes(page);
-        String snippet = page;
-        if (snippet != null && snippet.length() > 120) snippet = snippet.substring(0, 120) + "...";
-        System.out.printf("PAGE %d: cp=%d, color=%s, text=\"%s\"%n", idx, cp, hasColor, snippet);
     }
 }

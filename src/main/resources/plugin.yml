@@ -1,17 +1,26 @@
 name: bookprinter
-version: '1.1'
+version: '${project.version}' #修改为同pom.xml版本同步 更适合懒人(偷懒bushi)
 main: com.majesticrise.bookprinter.BookPrinter
 api-version: '1.21'
 load: STARTUP
+folia-supported: true #新增了Folia支持,所以这里声明支持Folia
 authors: [ majesticrise ]
-description: A Paper plugin generates Minecraft books from text files
-website: https://space.bilibili.com/3493114226411557
+description: 支持Paper和Folia的现代化TXT转Book插件，支持RGB渐变与双模式分页
+#此处删除了作者的Bilbil主页链接 因为个人不太喜欢往插件里加私货
+
 commands:
   bookprinter:
-    description: 将服务器上的 TXT 文件转换为已写的书
-    usage: /bookprinter <文件名或绝对路径> [署名]
+    description: 将TXT文件转换为成书
+    usage: /bookprinter <文件名/指令> [署名]
     permission: bookprinter.use
+    aliases: [bp, printbook]
 permissions:
   bookprinter.use:
-    description: 允许使用 /bookprinter
+    description: 允许使用书籍打印功能
+    default: op
+  bookprinter.reload:
+    description: 允许重载插件配置
+    default: op
+  bookprinter.info:
+    description: 允许查看插件运行信息
     default: op

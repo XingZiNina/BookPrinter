@@ -1,0 +1,46 @@
+prefix: "[BookPrinter]"
+
+# 通用信息
+no_permission: "&c你没有权限执行此操作。"
+unknown_command: "&c未知的子命令。"
+reload_success: "&a配置文件和语言文件已重载。"
+start_generating: "&e正在读取并生成书籍，请稍候..."
+
+# Info 指令
+info_header: "&6========== [BookPrinter] =========="
+info_mode: "&e当前运行模式: &a{mode}"
+info_lang: "&e语言设置: &a{lang}"
+info_max_bytes: "&e最大文件限制: &a{size}"
+info_version: "&e插件版本: &a{version}"
+info_footer: "&6=================================="
+
+# 参数错误
+usage_main: "&e用法: /bookprinter <文件名或相对路径> [署名]"
+usage_mode: "&7当前模式: &e{mode}"
+
+# 文件与路径错误
+path_invalid: "&c路径包含非法字符或访问越界。"
+path_no_absolute: "&cClassic 模式下不允许使用绝对路径。"
+path_no_subdir: "&cClassic 模式下不允许使用子目录，请在配置中开启。"
+file_not_found: "&c文件不存在或不是文件: &f{file}"
+file_too_large: "&c文件过大 (&e{size}&c 字节)，超过了限制 (&e{limit}&c 字节)。"
+io_error: "&c读取文件时发生错误: &f{error}"
+
+# 生成结果
+success: "&a书籍生成成功!"
+success_detail: "&e文件: &f{file} &7(共 &e{pages}&7 页)"
+inventory_full: "&c背包空间不足，书籍已掉落在你脚下。"
+console_generated: "&a已为控制台生成书籍 (无法直接给予)。"
+
+# 内部错误
+internal_error: "&c生成书籍时发生内部错误，请查看服务器日志。"
+
+# 默认不用动
+log_plugin_enabled: "[BookPrinter] 插件已启用。"
+log_dir_failed: "[BookPrinter] 无法创建插件数据目录: {path}"
+log_command_not_found: "[BookPrinter] 未在 plugin.yml 中找到命令，插件无法使用！"
+log_lang_loaded: "[BookPrinter] 已加载语言文件: {lang}"
+log_path_denied: "[BookPrinter] 阻止了非法路径访问: {path}"
+log_player_offline: "[BookPrinter] 玩家 {name} 在生成书籍期间下线。"
+log_parse_error: "[BookPrinter] 文本解析失败 ({mode} 模式) 在文件 {file}"
+log_io_error: "[BookPrinter] 读取文件 IOException: {file}"
