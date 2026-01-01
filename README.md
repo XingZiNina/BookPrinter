@@ -1,7 +1,6 @@
 [![Java](https://img.shields.io/badge/Java-21+-blue.svg)](https://openjdk.org/projects/jdk/21/)
-[![Paper](https://img.shields.io/badge/API-1.21+-lightgrey.svg)](https://papermc.io/)
+[![Paper](https://img.shields.io/badge/Paper-1.21+-lightgrey.svg)](https://papermc.io/)
 [![Folia](https://img.shields.io/badge/Folia-Supported-green.svg)](https://papermc.io/)
-[![License](https://img.shields.io/badge/License-Your_License-blue.svg)](LICENSE)
 
 支持Paper/Folia服务器设计的 TXT 文本转成书物品插件。
 
